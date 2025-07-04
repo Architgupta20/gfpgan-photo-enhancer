@@ -1,49 +1,76 @@
 import os
-import gradio as gr
 import replicate
+import gradio as gr
 import tempfile
-from PIL import Image
 import requests
+import zipfile
+from PIL import Image
 from dotenv import load_dotenv
+from base64 import b64encode
 
-# Load the REPLICATE_API_TOKEN from environment variables
+# Load API token
 load_dotenv()
 os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
 
-def enhance_face(image_list):
-    enhanced_images = []
+# GFPGAN Model Version
+MODEL_VERSION = "tencentarc/gfpgan:0fbacf7afc6c144e5be9767cff80f25aff23e52b0708f17e20f9879b2f21516c"
 
-    for image in image_list:
-        # Save the uploaded image to a temporary file
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-            image.save(temp_file.name)
-            with open(temp_file.name, "rb") as file:
-                # Call the Replicate API
+def enhance_faces(images):
+    zip_path = os.path.join(tempfile.gettempdir(), "enhanced_faces.zip")
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        gallery = []
+
+        for image_file in images:
+            try:
+                # Save temp image
+                input_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+
+                # Read image file properly from path
+                with open(image_file.name, "rb") as src:
+                    content = src.read()
+                    input_temp.write(content)
+                    input_temp.flush()
+
+                # Convert to base64
+                encoded_image = b64encode(content).decode("utf-8")
+                data_uri = f"data:image/jpeg;base64,{encoded_image}"
+
+                # Replicate inference
                 output_url = replicate.run(
-                    "tencentarc/gfpgan:0fbacf7afc6c144e5be9767cff80f25aff23e52b0708f17e20f9879b2f21516c",
-                    input={"img": file}
+                    MODEL_VERSION,
+                    input={"img": data_uri}
                 )
 
-        # Download the enhanced image
-        response = requests.get(output_url)
-        enhanced_temp_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
-        with open(enhanced_temp_path, "wb") as out_file:
-            out_file.write(response.content)
+                # Download enhanced image
+                response = requests.get(output_url)
+                if response.status_code != 200:
+                    raise Exception("Failed to download enhanced image")
 
-        # Open the enhanced image with PIL and add to result list
-        enhanced_image = Image.open(enhanced_temp_path)
-        enhanced_images.append(enhanced_image)
+                output_temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+                with open(output_temp_path, "wb") as f:
+                    f.write(response.content)
 
-    return enhanced_images
+                # Add to ZIP
+                zipf.write(output_temp_path, arcname=os.path.basename(output_temp_path))
+                gallery.append(Image.open(output_temp_path))
 
-# Gradio interface
-iface = gr.Interface(
-    fn=enhance_face,
-    inputs=gr.File(file_types=["image"], label="Upload 1–5 Face Images", multiple=True),
-    outputs=gr.Gallery(label="Enhanced Images").style(grid=2),
-    title="Face Enhancer using GFPGAN",
-    description="Upload images to enhance faces using GFPGAN via Replicate.",
+            except Exception as e:
+                print(f"Error processing image: {e}")
+
+    return gallery, zip_path
+
+# Gradio UI
+demo = gr.Interface(
+    fn=enhance_faces,
+    inputs=gr.File(label="Upload Images", file_types=["image"], file_count="multiple"),
+    outputs=[
+        gr.Gallery(label="Enhanced Faces"),
+        gr.File(label="Download All as ZIP")
+    ],
+    title="GFPGAN Face Enhancer",
+    description="Upload 5–20 face images. They will be enhanced using GFPGAN (via Replicate) and zipped for download.",
+    allow_flagging="never"
 )
 
-# Launch
-iface.launch()
+if __name__ == "__main__":
+    demo.launch(share=True)
