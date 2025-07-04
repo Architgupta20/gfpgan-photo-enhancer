@@ -1,0 +1,5 @@
+gradio
+replicate
+python-dotenv
+Pillow
+requests
