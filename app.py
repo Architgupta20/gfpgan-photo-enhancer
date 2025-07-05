@@ -1,3 +1,4 @@
+"""
 import os
 import replicate
 import gradio as gr
@@ -74,3 +75,55 @@ demo = gr.Interface(
 
 if __name__ == "__main__":
     demo.launch(share=True)
+|"""
+import os
+import gradio as gr
+import replicate
+from PIL import Image
+import uuid
+
+def enhance_faces(uploaded_images, user_token):
+    if not user_token:
+        return ["Error: You must provide a Replicate API token."]
+
+    os.environ["REPLICATE_API_TOKEN"] = user_token
+
+    enhanced_images = []
+
+    for img in uploaded_images:
+        try:
+            # Load the image
+            image = Image.open(img.name)
+
+            # Call Replicate GFPGAN
+            output_url = replicate.run(
+                "tencentarc/gfpgan",
+                input={"img": image}
+            )
+
+            # Save the result locally
+            image_data = Image.open(replicate.files.download(output_url))
+            os.makedirs("enhanced_faces", exist_ok=True)
+            filename = f"enhanced_faces/enhanced_{uuid.uuid4().hex[:8]}.png"
+            image_data.save(filename)
+
+            enhanced_images.append(filename)
+
+        except Exception as e:
+            enhanced_images.append(f"Error processing image: {e}")
+
+    return enhanced_images
+
+
+iface = gr.Interface(
+    fn=enhance_faces,
+    inputs=[
+        gr.File(file_types=["image"], label="Upload 1–5 Face Images", file_count="multiple"),
+        gr.Textbox(label="Replicate API Token", type="password")
+    ],
+    outputs=gr.Gallery(label="Enhanced Faces"),
+    title="GFPGAN Face Enhancer",
+    description="Enhance face images using GFPGAN via Replicate API"
+)
+
+iface.launch(share=True)  # <== Enables public Gradio link
